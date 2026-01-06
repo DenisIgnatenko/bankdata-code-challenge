@@ -13,14 +13,14 @@ import org.jboss.logging.Logger;
 import java.io.IOException;
 
 @ApplicationScoped
-public class AccountEventDBService {
-    private static final Logger LOG = Logger.getLogger(AccountEventDBService.class);
+public class AccountEventIngestionService {
+    private static final Logger LOG = Logger.getLogger(AccountEventIngestionService.class);
 
     private final ObjectMapper mapper;
     private final AccountEventRepository repository;
 
     @Inject
-    public AccountEventDBService(ObjectMapper mapper, AccountEventRepository repository) {
+    public AccountEventIngestionService(ObjectMapper mapper, AccountEventRepository repository) {
         this.mapper = mapper;
         this.repository = repository;
     }
@@ -38,6 +38,9 @@ public class AccountEventDBService {
 
         try {
             repository.persist(entity);
+
+            repository.flush();
+
         } catch (PersistenceException error) {
             if (isUniqueViolation(error)) {
                 LOG.debugf("Duplicate AccountEvent (db constraint) ignored: eventId=%s", event.eventId());
@@ -46,7 +49,11 @@ public class AccountEventDBService {
             throw error;
         }
 
-        LOG.infof("Stored AccountEvent: eventId=%s type=%s occurredAt=%s", event.eventId(), event.type(), event.occurredAt());
+        LOG.infof("Stored AccountEvent: eventId=%s type=%s occurredAt=%s",
+                event.eventId(),
+                event.type(),
+                event.occurredAt()
+        );
     }
 
     private AccountEvent parse(String json) {
@@ -57,8 +64,8 @@ public class AccountEventDBService {
         }
     }
 
-    private static boolean isUniqueViolation(Throwable t) {
-        Throwable cur = t;
+    private static boolean isUniqueViolation(Throwable throwable) {
+        Throwable cur = throwable;
         while (cur != null) {
             if (cur instanceof org.hibernate.exception.ConstraintViolationException) {
                 return true;

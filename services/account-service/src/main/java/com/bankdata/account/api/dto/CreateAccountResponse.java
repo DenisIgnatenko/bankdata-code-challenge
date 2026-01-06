@@ -1,4 +1,6 @@
 package com.bankdata.account.api.dto;
 
-public class CreateAccountResponse {
+import java.math.BigDecimal;
+
+public record CreateAccountResponse(String accountNumber, BigDecimal balance) {
 }

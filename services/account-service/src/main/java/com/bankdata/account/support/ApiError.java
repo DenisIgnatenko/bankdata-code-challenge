@@ -1,4 +1,6 @@
 package com.bankdata.account.support;
 
-public class ApiError {
+import java.util.Map;
+
+public record ApiError(String code, String message, Map<String, Object> details) {
 }

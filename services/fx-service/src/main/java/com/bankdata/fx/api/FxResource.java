@@ -9,12 +9,15 @@ import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
+import org.eclipse.microprofile.openapi.annotations.Operation;
+import org.eclipse.microprofile.openapi.annotations.tags.Tag;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 
 @Path("/fx")
 @Produces(MediaType.APPLICATION_JSON)
+@Tag(name = "FX")
 @ApplicationScoped
 public class FxResource {
 
@@ -27,6 +30,7 @@ public class FxResource {
 
     @GET
     @Path("/dkk-usd")
+    @Operation(summary = "Convert DKK to USD", description = "Uses exchangerate-api.com pair conversion. Default amount=100.00")
     public DkkUsdResponse convert(@QueryParam("amount") BigDecimal amount) {
         BigDecimal dkk = (amount == null) ? new BigDecimal("100.00") : amount;
 

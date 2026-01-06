@@ -1,0 +1,123 @@
+services:
+  kafka:
+    image: apache/kafka:3.7.0
+    container_name: bankdata-kafka
+    ports:
+      - "29092:29092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
+
+      KAFKA_LISTENERS: "PLAINTEXT://:9092,PLAINTEXT_HOST://:29092,CONTROLLER://:9093"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT,CONTROLLER:PLAINTEXT"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+
+
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 25
+
+  kafka-init:
+    image: apache/kafka:3.7.0
+    container_name: kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: ["/bin/bash", "-euc"]
+    command: |
+      echo "Waiting for Kafka broker at kafka:9092 ..."
+      ok=0
+      for i in {1..60}; do
+        if /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list >/dev/null 2>&1; then
+          ok=1
+          break
+        fi
+        sleep 1
+      done
+      if [ "$ok" -ne 1 ]; then
+        echo "Kafka did not become ready in time"
+        exit 1
+      fi
+
+      echo "Creating topics..."
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 \
+        --create --if-not-exists --topic words-in --partitions 1 --replication-factor 1
+
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 \
+        --create --if-not-exists --topic words-out --partitions 1 --replication-factor 1
+
+      echo "Kafka init done."
+
+  account-service:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.quarkus-jvm
+      args:
+        SERVICE: services/account-service
+    container_name: account-service
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+    environment:
+      QUARKUS_HTTP_PORT: 8081
+      QUARKUS_PROFILE: kafka
+      KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8081/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  fx-service:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.quarkus-jvm
+      args:
+        SERVICE: services/fx-service
+    container_name: fx-service
+    environment:
+      QUARKUS_HTTP_PORT: 8082
+      KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
+      EXCHANGE_RATE_API_KEY: "${EXCHANGE_RATE_API_KEY}"
+    ports:
+      - "8082:8082"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8082/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  analytics-service:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.quarkus-jvm
+      args:
+        SERVICE: services/analytics-service
+    container_name: analytics-service
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+    environment:
+      QUARKUS_HTTP_PORT: 8083
+      QUARKUS_PROFILE: kafka
+      KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
+    ports:
+      - "8083:8083"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8083/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20

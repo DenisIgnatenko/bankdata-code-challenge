@@ -14,14 +14,11 @@ import jakarta.transaction.Transactional;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 
-import org.jboss.logging.Logger;
-
 @ApplicationScoped
 public class AccountService {
-    private static final Logger LOG = Logger.getLogger(AccountService.class);
-
     //for unique collisions
     private static final int MAX_GENERATION_ATTEMPTS = 10;
+
     private final AccountRepository repository;
     private final AccountNumberGenerator generator;
     private final AccountEventPublisher eventPublisher;
@@ -38,25 +35,19 @@ public class AccountService {
     @Transactional
     public CreateAccountResponse create(CreateAccountRequest request) {
         //1. Normalizing money. ZERO amount - acceptable. Scale = 2, no rounding.
-        BigDecimal initial = normalizeMoney(
-                request.initialDeposit() == null ? BigDecimal.ZERO : request.initialDeposit()
+        BigDecimal initial = normalizeMoneyAllowZero(
+                request.initialDeposit() == null ? BigDecimal.ZERO : request.initialDeposit(),
+                "initialDeposit"
         );
 
         //2. Name check. Deleting spaces, null-check, blank-check. May be better to move to bean validation (@NotBlank)
-        String firstName = request.firstName() == null ? null : request.firstName().trim();
-        String lastName = request.lastName() == null ? null : request.lastName().trim();
-
-        if (firstName == null || firstName.isBlank()) {
-            throw new IllegalArgumentException("First Name is Required");
-        }
-        if (lastName == null || lastName.isBlank()) {
-            throw new IllegalArgumentException("Last name is Required");
-        }
+        String firstName = normalizeName(request.firstName(), "firstName");
+        String lastName = normalizeName(request.lastName(), "lastName");
 
         //3. Retry in possible unique collisions
         //TRAP: we cannot make SELECT to check uniqueness (its a race). Must refer to unique costraint in DB
         for(int attempt = 1; attempt <= MAX_GENERATION_ATTEMPTS; attempt++) {
-            String accountNumber = generator.next(); //remember that generator does not promised uniqueness to us :)
+            String accountNumber = generator.next(); //generator does not promised uniqueness to us :)
 
             AccountEntity entity = new AccountEntity(
                     accountNumber,
@@ -66,23 +57,23 @@ public class AccountService {
             );
 
             try {
-                //persist and flush makes Hibernate to make SQL Insert NOW. Important that we check uniqueness
-                //inside try/catch block
+                //persist and flush makes Hibernate to execute SQL Insert NOW.
+                //Important that we check uniqueness immediately
                 repository.persistAndFlush(entity);
 
                 eventPublisher.safePublish(
                         AccountEvent.created(
-                                entity.accountNumber,
-                                entity.balance.toPlainString()
+                                entity.getAccountNumber(),
+                                entity.getBalance().toPlainString()
                         )
                 );
 
-                return new CreateAccountResponse(entity.accountNumber, entity.balance);
+                return new CreateAccountResponse(entity.getAccountNumber(), entity.getBalance());
             } catch (PersistenceException exception) {
                 if (isUniqueConstraintViolation(exception)) {
                     continue; //if we are in uniqueness violation - starting new attempt.
                 }
-                //if any other exception - push up.
+                //if any other exception - new cycle.
                 throw exception;
             }
         }
@@ -93,102 +84,132 @@ public class AccountService {
 
     @Transactional
     public BalanceResponse deposit(String accountNumber, DepositRequest request) {
-        BigDecimal amount = normalizeMoney(request.amount());
+        requireNonBlank(accountNumber, "accountNumber");
+
+        // deposit amount: must be > 0; scale must be <= 2 without rounding
+        BigDecimal amount = normalizeMoneyPositive(request.amount(), "amount");
+
         AccountEntity entity = repository.getForUpdate(accountNumber);
         entity.deposit(amount);
 
         eventPublisher.safePublish(
                 AccountEvent.deposited(
-                        entity.accountNumber,
+                        entity.getAccountNumber(),
                         amount.toPlainString(),
-                        entity.balance.toPlainString()
+                        entity.getBalance().toPlainString()
                 )
         );
 
-        return new BalanceResponse(entity.accountNumber, entity.balance);
+        return new BalanceResponse(entity.getAccountNumber(), entity.getBalance());
     }
 
     @Transactional
     public TransferResponse transfer(TransferRequest request) {
-        if (request.fromAccountNumber().equals(request.toAccountNumber()))
-            throw new IllegalStateException("accounts for transfer must be different");
+        String fromAcc = normalizeAccountNumber(request.fromAccountNumber(), "fromAccountNumber");
+        String toAcc = normalizeAccountNumber(request.toAccountNumber(), "toAccountNumber");
 
-        BigDecimal amount = normalizeMoney(request.amount());
-
-        //deadlock possibility if there will be to parallel transactions A->B, B->A
-        //idea is to sort them as strings, then lock from low to high
-        String a = request.fromAccountNumber();
-        String b = request.toAccountNumber();
-
-        AccountEntity first;
-        AccountEntity second;
-
-        if (a.compareTo(b) < 0) {
-            first = repository.getForUpdate(a);
-            second = repository.getForUpdate(b);
-        } else {
-            first = repository.getForUpdate(b);
-            second = repository.getForUpdate(a);
+        if (fromAcc.equals(toAcc)) {
+            throw new BadRequestException("fromAccountNumber and toAccountNumber must be different");
         }
 
-        //comparing
-        AccountEntity from = a.equals(first.accountNumber) ? first : second;
-        AccountEntity to = a.equals(first.accountNumber) ? second : first;
+        BigDecimal amount = normalizeMoneyPositive(request.amount(), "amount");
 
-        //then check amount > 0, balance - amount >=0)
+        // lock in order to prevent deadlocks: A->B and B-> A
+        String firstKey = (fromAcc.compareTo(toAcc) < 0) ? fromAcc : toAcc;
+        String secondKey = (fromAcc.compareTo(toAcc) < 0) ? toAcc : fromAcc;
+
+        AccountEntity first = repository.getForUpdate(firstKey);
+        AccountEntity second = repository.getForUpdate(secondKey);
+
+        AccountEntity from = fromAcc.equals(first.getAccountNumber()) ? first : second;
+        AccountEntity to = fromAcc.equals(first.getAccountNumber()) ? second : first;
+
         from.withdraw(amount);
-
-        //check amount > 0;
         to.deposit(amount);
 
         eventPublisher.safePublish(
                 AccountEvent.transferred(
-                        from.accountNumber,
-                        to.accountNumber,
+                        from.getAccountNumber(),
+                        to.getAccountNumber(),
                         amount.toPlainString()
                 )
         );
 
         return new TransferResponse(
-                from.accountNumber, from.balance,
-                to.accountNumber, to.balance
+                from.getAccountNumber(), from.getBalance(),
+                to.getAccountNumber(), to.getBalance()
         );
-
     }
+
 
     @Transactional
     public BalanceResponse balance(String accountNumber) {
+        requireNonBlank(accountNumber, "accountNumber");
         AccountEntity entity = repository.getByAccountNumber(accountNumber);
-        return new BalanceResponse(entity.accountNumber, entity.balance);
+        return new BalanceResponse(entity.getAccountNumber(), entity.getBalance());
     }
 
+    // ### Helpers
 
-    //Normalizing money amounts.
-    //Tasks: not null, not negative, must have 2 decimals after point, without rounding
-    private static BigDecimal normalizeMoney(BigDecimal value) {
+    private static String normalizeName(String value, String field) {
         if (value == null) {
-            throw new BadRequestException("Amount is required");
+            throw new BadRequestException(field + " is required");
         }
-
-        //we cannot accept negative numbers in amounts. Better to have deposit(positive) and withdraw(positive)
-        if (value.signum() < 0) {
-            throw new BadRequestException("Amount must be non-negative");
+        String trimmed = value.trim();
+        if (trimmed.isBlank()) {
+            throw new BadRequestException(field + " must not be blank");
         }
+        return trimmed;
+    }
 
+    private static String normalizeAccountNumber(String value, String field) {
+        if (value == null) {
+            throw new BadRequestException(field + " is required");
+        }
+        String trimmed = value.trim();
+        if (trimmed.isBlank()) {
+            throw new BadRequestException(field + " must not be blank");
+        }
+        return trimmed;
+    }
+
+    private static void requireNonBlank(String value, String field) {
+        if (value == null || value.trim().isBlank()) {
+            throw new BadRequestException(field + " is required");
+        }
+    }
+
+    // Normalize money. Not Null, max 2 decimals, no rounding
+    private static BigDecimal normalizeMoneyAllowZero(BigDecimal value, String field) {
+        BigDecimal normalized = normalizeScaleNoRounding(value, field);
+        if (normalized.signum() < 0) {
+            throw new BadRequestException(field + " must be non-negative");
+        }
+        return normalized;
+    }
+
+    private static BigDecimal normalizeMoneyPositive(BigDecimal value, String field) {
+        BigDecimal normalized = normalizeScaleNoRounding(value, field);
+        if (normalized.signum() <= 0) {
+            throw new BadRequestException(field + " must be positive");
+        }
+        return normalized;
+    }
+
+    private static BigDecimal normalizeScaleNoRounding(BigDecimal value, String field) {
+        if (value == null) {
+            throw new BadRequestException(field + " is required");
+        }
         try {
-            //important to get amount with 2 decimals after comma. UNNECESSARY because we dont want to round
-            //amounts, for example if we get 10.001.
+            // UNNECESSARY stops silent rounding
             return value.setScale(2, RoundingMode.UNNECESSARY);
         } catch (ArithmeticException exception) {
-            throw new BadRequestException("Amount must have max 2 decimal places");
+            throw new BadRequestException(field + " must have max 2 decimal places");
         }
     }
 
-    //trying to find that exception stands for unique constraints
-    //checking by text in message can be tricky. They can vary in different DBs
     private static boolean isUniqueConstraintViolation(Throwable throwable) {
         Throwable current = throwable;
-
         while (current != null) {
             if (current instanceof org.hibernate.exception.ConstraintViolationException) {
                 return true;

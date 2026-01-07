@@ -2,6 +2,7 @@ package com.bankdata.fx.integration;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.ws.rs.ServiceUnavailableException;
 import org.jboss.logging.Logger;
 
 import java.io.IOException;
@@ -29,11 +30,16 @@ public class ExchangeRateApiGateway {
 
     public ExchangeRateApiPairResponse pair(String base, String target, String amount) {
         String apiKey = config.apiKey();
-        if (apiKey == null || apiKey.isBlank()) {
-            throw new IllegalStateException("EXCHANGE_RATE_API_KEY is not configured");
+        if (apiKey == null || apiKey.isBlank() || "__MISSING__".equals(apiKey)) {
+            throw new ServiceUnavailableException("FX service is not configured: EXCHANGE_RATE_API_KEY is missing");
         }
 
-        URI uri = URI.create(config.baseUrl() + "/" + apiKey + "/pair/" + base + "/" + target + "/" + amount);
+        String baseUrl = config.baseUrl();
+        if (baseUrl.endsWith("/")) {
+            baseUrl = baseUrl.substring(0, baseUrl.length() - 1);
+        }
+
+        URI uri = URI.create(baseUrl + "/" + apiKey + "/pair/" + base + "/" + target + "/" + amount);
 
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(uri)
@@ -45,13 +51,15 @@ public class ExchangeRateApiGateway {
             HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
 
             if (response.statusCode() / 100 != 2) {
-                LOG.warnf("ExchangeRate API non-2xx: status: %s, body: %s", response.statusCode(), response.body());
+                LOG.warnf("ExchangeRate API non-2xx: status=%s body=%s", response.statusCode(), response.body());
+                throw new ServiceUnavailableException("FX provider error (HTTP " + response.statusCode() + ")");
             }
 
             ExchangeRateApiPairResponse body = mapper.readValue(response.body(), ExchangeRateApiPairResponse.class);
+
             if (!body.isSuccess()) {
                 LOG.warnf("ExchangeRate API error: errorType=%s body = %s", body.errorType(), response.body());
-                throw new IllegalStateException("ExchangeRate provider error: " + body.errorType());
+                throw new IllegalStateException("FX  provider error: " + body.errorType());
             }
 
             return body;

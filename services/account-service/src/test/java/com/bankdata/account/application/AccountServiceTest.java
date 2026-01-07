@@ -119,10 +119,10 @@ public class AccountServiceTest {
         verify(repository, times(1)).getForUpdate("0000000001");
         verify(eventPublisher, times(1)).safePublish(eventCaptor.capture());
 
-        AccountEvent ev = eventCaptor.getValue();
-        assertEquals("0000000001", ev.accountNumber());
-        assertEquals("5.00", ev.amount());
-        assertEquals("15.00", ev.balance());
+        AccountEvent event = eventCaptor.getValue();
+        assertEquals("0000000001", event.accountNumber());
+        assertEquals("5.00", event.amount());
+        assertEquals("15.00", event.balance());
     }
 
     @Test
@@ -141,8 +141,8 @@ public class AccountServiceTest {
     void transfer_sameAccount_doesNotLockOrPublish() {
         TransferRequest request = new TransferRequest("0000000001", "0000000001", new BigDecimal("1.00"));
 
-        BadRequestException ex = assertThrows(BadRequestException.class, () -> service.transfer(request));
-        assertTrue(ex.getMessage().toLowerCase().contains("must be different"));
+        BadRequestException exception = assertThrows(BadRequestException.class, () -> service.transfer(request));
+        assertTrue(exception.getMessage().toLowerCase().contains("must be different"));
 
         verifyNoInteractions(repository);
         verifyNoInteractions(eventPublisher);
@@ -176,10 +176,10 @@ public class AccountServiceTest {
         inOrder.verify(repository).getForUpdate(senderAccountNumber);
 
         verify(eventPublisher, times(1)).safePublish(eventCaptor.capture());
-        AccountEvent ev = eventCaptor.getValue();
-        assertEquals(senderAccountNumber, ev.fromAccountNumber());
-        assertEquals(receiverAccountNumber, ev.toAccountNumber());
-        assertEquals("10.00", ev.amount());
+        AccountEvent event = eventCaptor.getValue();
+        assertEquals(senderAccountNumber, event.fromAccountNumber());
+        assertEquals(receiverAccountNumber, event.toAccountNumber());
+        assertEquals("10.00", event.amount());
     }
 }
 

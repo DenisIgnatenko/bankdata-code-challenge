@@ -66,9 +66,9 @@ docker compose ps
 **Swagger UI**
 
 Each service exposes OpenAPI and Swagger UI:
-•	Account Service Swagger: http://localhost:8081/swagger/
-•	FX Service Swagger: http://localhost:8082/swagger/
-•	Analytics Service Swagger: http://localhost:8083/swagger/
+-	Account Service Swagger: http://localhost:8081/swagger/
+-	FX Service Swagger: http://localhost:8082/swagger/
+-	Analytics Service Swagger: http://localhost:8083/swagger/
 
 ## Try it quickly
 
@@ -213,7 +213,7 @@ Money transfer flow
 Analytics service ingestion pipeline
 ![Analytics-service ingestion pipeline.png](docs/diagrams/Analytics-service%20ingestion%20pipeline.png)
 
-FX-Service request flow
+ForeignExchange service request flow
 ![FX-service request flow.png](docs/diagrams/FX-service%20request%20flow.png)
 
 💛
